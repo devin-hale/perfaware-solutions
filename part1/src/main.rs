@@ -1,6 +1,10 @@
+use clap::Parser;
 use std::{fmt::Display, fs, path::PathBuf};
 
-use clap::Parser;
+mod mov;
+use mov::MOV;
+
+use crate::mov::{ImmReg, MovReg};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -15,6 +19,7 @@ fn main() {
     let mut current_op: Option<Op> = None;
     let mut dasm = String::from("bits 16\n");
     for b in bytes {
+        //println!("{b:0>8b}");
         match current_op {
             None => {
                 dasm.push_str("\n");
@@ -23,8 +28,11 @@ fn main() {
             Some(mut op) => {
                 op.decode(b);
                 if op.done() {
+                    println!("{op}");
                     dasm.push_str(format!("{op}").as_str());
                     current_op = None;
+                } else {
+                    current_op = Some(op);
                 }
             }
         }
@@ -67,6 +75,69 @@ impl From<u8> for MOD {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RM {
+    Mem(MemData),
+    Reg(REG),
+}
+
+impl Display for RM {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Reg(r) => format!("{r}"),
+            Self::Mem(md) => format!("{md}"),
+        };
+        write!(f, "{s}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MemData {
+    BXSI,
+    BXDI,
+    BPSI,
+    BPDI,
+    SI,
+    DI,
+    Direct(Option<u16>),
+    BX,
+}
+
+impl From<u8> for MemData {
+    fn from(v: u8) -> Self {
+        match v {
+            0 => Self::BXSI,
+            1 => Self::BXDI,
+            2 => Self::BPSI,
+            3 => Self::BPDI,
+            4 => Self::SI,
+            5 => Self::DI,
+            6 => Self::Direct(None),
+            7 => Self::BX,
+            _ => panic!("invalid MemData value: {v}"),
+        }
+    }
+}
+
+impl Display for MemData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::BXSI => String::from("bx + si"),
+            Self::BXDI => String::from("bx + di"),
+            Self::BPSI => String::from("bp + si"),
+            Self::BPDI => String::from("bp + di"),
+            Self::SI => String::from("si"),
+            Self::DI => String::from("di"),
+            Self::Direct(d) => match d {
+                Some(v) => format!("{}", v),
+                None => String::from("0"),
+            },
+            Self::BX => String::from("bx"),
+        };
+        write!(f, "[{s}]")
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Op {
     MOV(MOV),
@@ -95,111 +166,8 @@ impl Display for Op {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum MOV {
-    Reg(MovReg),
-}
-
-impl MOV {
-    fn decode(&mut self, b: u8) {
-        match self {
-            Self::Reg(mr) => mr.decode(b),
-        }
-    }
-
-    fn done(&self) -> bool {
-        match self {
-            Self::Reg(mr) => mr.done(),
-        }
-    }
-}
-
-impl Display for MOV {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Self::Reg(mr) => format!("{mr}"),
-        };
-        write!(f, "{s}")
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct MovReg {
-    d: SBF,
-    w: SBF,
-    data: Option<u8>,
-    dlo: Option<u8>,
-    dhi: Option<u8>,
-    done: bool,
-}
-
-impl MovReg {
-    pub fn done(&self) -> bool {
-        self.done
-    }
-
-    pub fn decode(&mut self, b: u8) {
-        if self.data == None {
-            self.data = Some(b);
-            if self.r#mod() == MOD::Reg {
-                self.done = true;
-            }
-        } else {
-            match self.r#mod() {
-                MOD::Reg => self.done = true,
-                _ => panic!(""),
-            }
-        }
-    }
-
-    pub fn r#mod(&self) -> MOD {
-        match self.data {
-            None => panic!("data is None"),
-            Some(d) => ((d >> 6) & 0x3).into(),
-        }
-    }
-
-    pub fn src(&self) -> REG {
-        if self.d.0 { self.rm() } else { self.reg() }
-    }
-
-    pub fn dest(&self) -> REG {
-        if self.d.0 { self.reg() } else { self.rm() }
-    }
-
-    pub fn reg(&self) -> REG {
-        match self.data {
-            None => panic!("data is None"),
-            Some(d) => {
-                let val = (d >> 3) & 0x7;
-                let rf = RegField::new(val, self.w.0);
-                rf.reg
-            }
-        }
-    }
-
-    pub fn rm(&self) -> REG {
-        match self.data {
-            None => panic!("data is None"),
-            Some(d) => {
-                let val = d & 0x7;
-                let rf = RegField::new(val, self.w.0);
-                rf.reg
-            }
-        }
-    }
-}
-
-impl Display for MovReg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut i = String::from("mov ");
-        i.push_str(format!("{}, ", self.dest()).as_str());
-        i.push_str(format!("{}", self.src()).as_str());
-        write!(f, "{i}")
-    }
-}
-
-enum REG {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum REG {
     AL,
     CL,
     DL,
@@ -285,15 +253,10 @@ impl RegField {
 
 fn decode_op(opcode: u8) -> Op {
     if ((opcode >> 2) & 0b1111_11) == 0b1000_10 {
-        Op::MOV(MOV::Reg(MovReg {
-            d: ((opcode >> 1) & 1).into(),
-            w: (opcode & 1).into(),
-            done: false,
-            data: None,
-            dlo: None,
-            dhi: None,
-        }))
+        Op::MOV(MOV::Reg(MovReg::new(opcode)))
+    } else if ((opcode >> 4) & 0b1111) == 0b1011 {
+        Op::MOV(MOV::ImmReg(ImmReg::new(opcode)))
     } else {
-        todo!("{opcode}")
+        todo!("{opcode:0>8b}")
     }
 }
