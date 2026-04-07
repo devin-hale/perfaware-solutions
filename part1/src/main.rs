@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::{fmt::Display, fs, path::PathBuf};
+use std::{env::current_dir, fmt::Display, fs, io::Write, process::Command};
 
 mod mov;
 use mov::MOV;
@@ -8,27 +8,34 @@ use crate::mov::{ImmReg, MovReg};
 
 #[derive(Parser, Debug)]
 struct Args {
-    path: String,
+    listing: u8,
 }
 
 fn main() {
     let args = Args::parse();
-    let path = PathBuf::from(args.path);
-    let bytes = fs::read(path).unwrap();
+    let bytes = get_listing(args.listing);
+    let dasm = disassemble(&bytes);
+    println!("{dasm}");
+}
 
-    let mut current_op: Option<Op> = None;
+fn get_listing(listing: u8) -> Vec<u8> {
+    let mut path = current_dir().unwrap();
+    path.push(format!("src/listings/{listing}"));
+    fs::read(path).unwrap()
+}
+
+fn disassemble(asm: &[u8]) -> String {
     let mut dasm = String::from("bits 16\n");
-    for b in bytes {
-        //println!("{b:0>8b}");
+    let mut current_op: Option<Op> = None;
+    for b in asm {
         match current_op {
             None => {
                 dasm.push_str("\n");
-                current_op = Some(decode_op(b));
+                current_op = Some(decode_op(*b));
             }
             Some(mut op) => {
-                op.decode(b);
+                op.decode(*b);
                 if op.done() {
-                    println!("{op}");
                     dasm.push_str(format!("{op}").as_str());
                     current_op = None;
                 } else {
@@ -37,7 +44,22 @@ fn main() {
             }
         }
     }
-    println!("{dasm}");
+    dasm
+}
+
+fn assemble(dasm: &str) -> Vec<u8> {
+    let mut tmp = tempfile::NamedTempFile::new().unwrap();
+    tmp.write_all(dasm.as_bytes()).unwrap();
+
+    let output = Command::new("nasm")
+        .args(["-o", "/dev/stdout", tmp.path().to_str().unwrap()])
+        .output()
+        .expect("failed to start nasm");
+
+    if !output.status.success() {
+        panic!("nasm: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    output.stdout
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -78,6 +100,8 @@ impl From<u8> for MOD {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RM {
     Mem(MemData),
+    Byte(MemData, u8),
+    Word(MemData, u16),
     Reg(REG),
 }
 
@@ -85,7 +109,27 @@ impl Display for RM {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Reg(r) => format!("{r}"),
-            Self::Mem(md) => format!("{md}"),
+            Self::Mem(md) => format!("[{md}]"),
+            Self::Byte(md, b) => match md {
+                MemData::Direct(_) => {
+                    let mut s = String::from("bp");
+                    if *b != 0 {
+                        s.push_str(format!(" + {b}").as_str());
+                    }
+                    format!("[{s}]")
+                }
+                _ => format!("[{md} + {b}]"),
+            },
+            Self::Word(md, w) => match md {
+                MemData::Direct(_) => {
+                    let mut s = String::from("bp");
+                    if *w != 0 {
+                        s.push_str(format!(" + {w}").as_str());
+                    }
+                    format!("[{s}]")
+                }
+                _ => format!("[{md} + {w}]"),
+            },
         };
         write!(f, "{s}")
     }
@@ -134,7 +178,7 @@ impl Display for MemData {
             },
             Self::BX => String::from("bx"),
         };
-        write!(f, "[{s}]")
+        write!(f, "{s}")
     }
 }
 
@@ -258,5 +302,32 @@ fn decode_op(opcode: u8) -> Op {
         Op::MOV(MOV::ImmReg(ImmReg::new(opcode)))
     } else {
         todo!("{opcode:0>8b}")
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{assemble, disassemble, get_listing};
+
+    fn test_listing(l: u8) {
+        let source = get_listing(l);
+        let dasm = disassemble(&source);
+        let asm = assemble(&dasm);
+        assert_eq!(source, asm);
+    }
+
+    #[test]
+    fn listing_37() {
+        test_listing(37);
+    }
+
+    #[test]
+    fn listing_38() {
+        test_listing(38);
+    }
+
+    #[test]
+    fn listing_39() {
+        test_listing(39);
     }
 }

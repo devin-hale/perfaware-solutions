@@ -100,7 +100,20 @@ impl MovReg {
                         }
                     }
                 }
-                _ => panic!(""),
+                MOD::Byte => {
+                    if self.dlo == None {
+                        self.dlo = Some(b);
+                        self.done = true;
+                    }
+                }
+                MOD::Word => {
+                    if self.dlo == None {
+                        self.dlo = Some(b);
+                    } else if self.dhi == None {
+                        self.dhi = Some(b);
+                        self.done = true;
+                    }
+                }
             }
         }
     }
@@ -144,7 +157,14 @@ impl MovReg {
                     RM::Reg(rf.reg)
                 }
                 MOD::Mem => RM::Mem(self.decode_mem()),
-                _ => todo!("damn bro"),
+                MOD::Byte => {
+                    let (rm, b) = self.decode_mem_byte();
+                    RM::Byte(rm, b)
+                }
+                MOD::Word => {
+                    let (rm, w) = self.decode_mem_word();
+                    RM::Word(rm, w)
+                }
             },
         }
     }
@@ -155,6 +175,19 @@ impl MovReg {
             rm = MemData::Direct(Some(self.data()));
         }
         rm
+    }
+
+    fn decode_mem_byte(&self) -> (MemData, u8) {
+        let rm: MemData = (self.data.unwrap() & 0x7).into();
+        let b = self.dlo.unwrap();
+        (rm, b)
+    }
+
+    fn decode_mem_word(&self) -> (MemData, u16) {
+        let rm: MemData = (self.data.unwrap() & 0x7).into();
+        let lo = self.dlo.unwrap();
+        let hi = self.dhi.unwrap();
+        (rm, ((hi as u16) << 8) | (lo as u16))
     }
 }
 
