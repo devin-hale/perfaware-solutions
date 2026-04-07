@@ -5,6 +5,8 @@ use std::fmt::Display;
 pub enum MOV {
     Reg(MovReg),
     ImmReg(ImmReg),
+    ImmRM(ImmRM),
+    MemAcc(MemAcc),
 }
 
 impl MOV {
@@ -12,6 +14,8 @@ impl MOV {
         match self {
             Self::Reg(mr) => mr.decode(b),
             Self::ImmReg(ir) => ir.decode(b),
+            Self::ImmRM(irm) => irm.decode(b),
+            Self::MemAcc(ma) => ma.decode(b),
         }
     }
 
@@ -19,6 +23,8 @@ impl MOV {
         match self {
             Self::Reg(mr) => mr.done(),
             Self::ImmReg(ir) => ir.done(),
+            Self::ImmRM(irm) => irm.done(),
+            Self::MemAcc(ma) => ma.done(),
         }
     }
 }
@@ -28,6 +34,8 @@ impl Display for MOV {
         let s = match self {
             Self::Reg(mr) => format!("{mr}"),
             Self::ImmReg(ir) => format!("{ir}"),
+            Self::ImmRM(irm) => format!("{irm}"),
+            Self::MemAcc(ma) => format!("{ma}"),
         };
         write!(f, "{s}")
     }
@@ -177,10 +185,10 @@ impl MovReg {
         rm
     }
 
-    fn decode_mem_byte(&self) -> (MemData, u8) {
+    fn decode_mem_byte(&self) -> (MemData, i16) {
         let rm: MemData = (self.data.unwrap() & 0x7).into();
         let b = self.dlo.unwrap();
-        (rm, b)
+        (rm, (b as i8) as i16)
     }
 
     fn decode_mem_word(&self) -> (MemData, u16) {
@@ -257,6 +265,271 @@ impl Display for ImmReg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::from("mov ");
         s.push_str(format!("{}, {}", self.reg, self.data()).as_str());
+        write!(f, "{s}")
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ImmRM {
+    w: SBF,
+    data: Option<u8>,
+    dlo: Option<u8>,
+    dhi: Option<u8>,
+    d0: Option<u8>,
+    d1: Option<u8>,
+    done: bool,
+}
+
+impl ImmRM {
+    pub fn new(opcode: u8) -> Self {
+        let w: SBF = (opcode & 1).into();
+        Self {
+            w,
+            data: None,
+            dlo: None,
+            dhi: None,
+            d0: None,
+            d1: None,
+            done: false,
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.done
+    }
+
+    pub fn decode(&mut self, b: u8) {
+        if self.data == None {
+            self.data = Some(b);
+        } else {
+            match self.r#mod() {
+                MOD::Reg => {
+                    if self.d0 == None {
+                        self.d0 = Some(b);
+                    } else if self.d1 == None {
+                        self.d1 = Some(b);
+
+                        self.done = true
+                    }
+                }
+                MOD::Mem => {
+                    let md = self.decode_mem();
+                    match md {
+                        MemData::Direct(_) => {
+                            if self.dlo == None {
+                                self.dlo = Some(b);
+                            } else if self.dhi == None {
+                                self.dhi = Some(b);
+                            } else if self.d0 == None {
+                                self.d0 = Some(b);
+                                if !self.w.0 {
+                                    self.done = true;
+                                }
+                            } else if self.d1 == None {
+                                self.d1 = Some(b);
+                                self.done = true
+                            }
+                        }
+                        _ => {
+                            if self.d0 == None {
+                                self.d0 = Some(b);
+                                if !self.w.0 {
+                                    self.done = true;
+                                }
+                            } else if self.d1 == None {
+                                self.d1 = Some(b);
+
+                                self.done = true
+                            }
+                        }
+                    }
+                }
+                MOD::Byte => {
+                    if self.dlo == None {
+                        self.dlo = Some(b);
+                    } else if self.d0 == None {
+                        self.d0 = Some(b);
+                        if !self.w.0 {
+                            self.done = true;
+                        }
+                    } else if self.d1 == None {
+                        self.d1 = Some(b);
+                        self.done = true
+                    }
+                }
+                MOD::Word => {
+                    if self.dlo == None {
+                        self.dlo = Some(b);
+                    } else if self.dhi == None {
+                        self.dhi = Some(b);
+                    } else if self.d0 == None {
+                        self.d0 = Some(b);
+                        if !self.w.0 {
+                            self.done = true;
+                        }
+                    } else if self.d1 == None {
+                        self.d1 = Some(b);
+                        self.done = true
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn r#mod(&self) -> MOD {
+        match self.data {
+            None => panic!("data is None"),
+            Some(d) => ((d >> 6) & 0x3).into(),
+        }
+    }
+
+    pub fn rm(&self) -> RM {
+        match self.data {
+            None => panic!("data is None"),
+            Some(d) => match self.r#mod() {
+                MOD::Reg => {
+                    let val = d & 0x7;
+                    let rf = RegField::new(val, self.w.0);
+                    RM::Reg(rf.reg)
+                }
+                MOD::Mem => RM::Mem(self.decode_mem()),
+                MOD::Byte => {
+                    let (rm, b) = self.decode_mem_byte();
+                    RM::Byte(rm, b)
+                }
+                MOD::Word => {
+                    let (rm, w) = self.decode_mem_word();
+                    RM::Word(rm, w)
+                }
+            },
+        }
+    }
+
+    pub fn imm(&self) -> u16 {
+        let mut val: u16 = 0;
+        if let Some(lo) = self.d0 {
+            val = lo as u16;
+        }
+        if let Some(hi) = self.d1 {
+            val = ((hi as u16) << 8) | val;
+        }
+        val
+    }
+
+    pub fn data(&self) -> u16 {
+        let mut val: u16 = 0;
+        if let Some(lo) = self.dlo {
+            val = lo as u16;
+        }
+        if let Some(hi) = self.dhi {
+            val = ((hi as u16) << 8) | val;
+        }
+        val
+    }
+
+    fn decode_mem(&self) -> MemData {
+        let mut rm: MemData = (self.data.unwrap() & 0x7).into();
+        if rm == MemData::Direct(None) {
+            rm = MemData::Direct(Some(self.data()));
+        }
+        rm
+    }
+
+    fn decode_mem_byte(&self) -> (MemData, i16) {
+        let rm: MemData = (self.data.unwrap() & 0x7).into();
+        let b = self.dlo.unwrap();
+        (rm, (b as i8) as i16)
+    }
+
+    fn decode_mem_word(&self) -> (MemData, u16) {
+        let rm: MemData = (self.data.unwrap() & 0x7).into();
+        let lo = self.dlo.unwrap();
+        let hi = self.dhi.unwrap();
+        (rm, ((hi as u16) << 8) | (lo as u16))
+    }
+}
+
+impl Display for ImmRM {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::from("mov ");
+        s.push_str(format!("{}", self.rm()).as_str());
+        let size = match self.w.0 {
+            true => String::from("word"),
+            false => String::from("byte"),
+        };
+        let imm = self.imm();
+        write!(f, "{s}, {size} {imm}")
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MemAcc {
+    w: SBF,
+    lo: Option<u8>,
+    hi: Option<u8>,
+    reversed: bool,
+    done: bool,
+}
+
+impl MemAcc {
+    pub fn new(opcode: u8) -> Self {
+        let w: SBF = (opcode & 1).into();
+        Self {
+            w,
+            lo: None,
+            hi: None,
+            reversed: false,
+            done: false,
+        }
+    }
+
+    pub fn reversed(opcode: u8) -> Self {
+        let w: SBF = (opcode & 1).into();
+        Self {
+            w,
+            lo: None,
+            hi: None,
+            reversed: true,
+            done: false,
+        }
+    }
+
+    pub fn done(&self) -> bool {
+        self.done
+    }
+
+    pub fn decode(&mut self, b: u8) {
+        if self.lo == None {
+            self.lo = Some(b);
+            if !self.w.0 {
+                self.done = true;
+            }
+        } else if self.hi == None {
+            self.hi = Some(b);
+            self.done = true;
+        }
+    }
+
+    pub fn addr(&self) -> u16 {
+        let mut addr: u16 = 0;
+        if let Some(lo) = self.lo {
+            addr = lo as u16;
+        }
+        if let Some(hi) = self.hi {
+            addr = ((hi as u16) << 8) | addr;
+        }
+        addr
+    }
+}
+
+impl Display for MemAcc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = String::from("mov ");
+        if self.reversed {
+            s.push_str(format!("[{}], ax", self.addr()).as_str());
+        } else {
+            s.push_str(format!("ax, [{}]", self.addr()).as_str());
+        }
         write!(f, "{s}")
     }
 }

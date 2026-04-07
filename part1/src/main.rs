@@ -4,7 +4,7 @@ use std::{env::current_dir, fmt::Display, fs, io::Write, process::Command};
 mod mov;
 use mov::MOV;
 
-use crate::mov::{ImmReg, MovReg};
+use crate::mov::{ImmRM, ImmReg, MemAcc, MovReg};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -100,7 +100,7 @@ impl From<u8> for MOD {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RM {
     Mem(MemData),
-    Byte(MemData, u8),
+    Byte(MemData, i16),
     Word(MemData, u16),
     Reg(REG),
 }
@@ -114,11 +114,27 @@ impl Display for RM {
                 MemData::Direct(_) => {
                     let mut s = String::from("bp");
                     if *b != 0 {
-                        s.push_str(format!(" + {b}").as_str());
+                        if *b > 0 {
+                            s.push_str(format!(" + ").as_str());
+                        }
+                        if *b < 0 {
+                            s.push_str(format!(" - ").as_str());
+                        }
+                        s.push_str(format!("{b}").as_str());
                     }
                     format!("[{s}]")
                 }
-                _ => format!("[{md} + {b}]"),
+                _ => {
+                    let mut s = format!("{md}");
+                    if *b > 0 {
+                        s.push_str(format!(" + ").as_str());
+                    }
+                    if *b < 0 {
+                        s.push_str(format!(" - ").as_str());
+                    }
+                    s.push_str(format!("{}", b.abs()).as_str());
+                    format!("[{s}]")
+                }
             },
             Self::Word(md, w) => match md {
                 MemData::Direct(_) => {
@@ -128,7 +144,18 @@ impl Display for RM {
                     }
                     format!("[{s}]")
                 }
-                _ => format!("[{md} + {w}]"),
+                _ => {
+                    let mut s = format!("{md}");
+                    let val = *w as i16;
+                    if val > 0 {
+                        s.push_str(format!(" + ").as_str());
+                    }
+                    if val < 0 {
+                        s.push_str(format!(" - ").as_str());
+                    }
+                    s.push_str(format!("{}", val.abs()).as_str());
+                    format!("[{s}]")
+                }
             },
         };
         write!(f, "{s}")
@@ -300,6 +327,12 @@ fn decode_op(opcode: u8) -> Op {
         Op::MOV(MOV::Reg(MovReg::new(opcode)))
     } else if ((opcode >> 4) & 0b1111) == 0b1011 {
         Op::MOV(MOV::ImmReg(ImmReg::new(opcode)))
+    } else if ((opcode >> 1) & 0b111_1111) == 0b110_0011 {
+        Op::MOV(MOV::ImmRM(ImmRM::new(opcode)))
+    } else if ((opcode >> 1) & 0b111_1111) == 0b101_0000 {
+        Op::MOV(MOV::MemAcc(MemAcc::new(opcode)))
+    } else if ((opcode >> 1) & 0b111_1111) == 0b101_0001 {
+        Op::MOV(MOV::MemAcc(MemAcc::reversed(opcode)))
     } else {
         todo!("{opcode:0>8b}")
     }
@@ -329,5 +362,10 @@ mod test {
     #[test]
     fn listing_39() {
         test_listing(39);
+    }
+
+    #[test]
+    fn listing_40() {
+        test_listing(40);
     }
 }
