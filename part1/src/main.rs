@@ -1,10 +1,14 @@
 use clap::Parser;
 use std::{env::current_dir, fmt::Display, fs, io::Write, process::Command};
 
+mod add;
 mod mov;
 use mov::MOV;
 
-use crate::mov::{ImmRM, ImmReg, MemAcc, MovReg};
+use crate::{
+    add::{ADD, Acc, Add, IRM},
+    mov::{ImmRM, ImmReg, MemAcc, MovReg},
+};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -36,6 +40,7 @@ fn disassemble(asm: &[u8]) -> String {
             Some(mut op) => {
                 op.decode(*b);
                 if op.done() {
+                    println!("{op}");
                     dasm.push_str(format!("{op}").as_str());
                     current_op = None;
                 } else {
@@ -77,7 +82,7 @@ impl From<bool> for SBF {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum MOD {
     Mem,  // memory mode, no displacement
     Byte, // memory mode, 8 bit displacement
@@ -212,18 +217,21 @@ impl Display for MemData {
 #[derive(Debug, Clone, Copy)]
 enum Op {
     MOV(MOV),
+    ADD(ADD),
 }
 
 impl Op {
     fn decode(&mut self, b: u8) {
         match self {
             Self::MOV(m) => m.decode(b),
+            Self::ADD(a) => a.decode(b),
         }
     }
 
     fn done(&self) -> bool {
         match self {
             Self::MOV(m) => m.done(),
+            Self::ADD(a) => a.done(),
         }
     }
 }
@@ -232,6 +240,7 @@ impl Display for Op {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::MOV(m) => format!("{m}"),
+            Self::ADD(m) => format!("{m}"),
         };
         write!(f, "{s}")
     }
@@ -323,18 +332,40 @@ impl RegField {
 }
 
 fn decode_op(opcode: u8) -> Op {
-    if ((opcode >> 2) & 0b1111_11) == 0b1000_10 {
-        Op::MOV(MOV::Reg(MovReg::new(opcode)))
-    } else if ((opcode >> 4) & 0b1111) == 0b1011 {
-        Op::MOV(MOV::ImmReg(ImmReg::new(opcode)))
-    } else if ((opcode >> 1) & 0b111_1111) == 0b110_0011 {
-        Op::MOV(MOV::ImmRM(ImmRM::new(opcode)))
-    } else if ((opcode >> 1) & 0b111_1111) == 0b101_0000 {
-        Op::MOV(MOV::MemAcc(MemAcc::new(opcode)))
-    } else if ((opcode >> 1) & 0b111_1111) == 0b101_0001 {
-        Op::MOV(MOV::MemAcc(MemAcc::reversed(opcode)))
+    if let Some(op) = decode_mov(opcode) {
+        op
+    } else if let Some(op) = decode_add(opcode) {
+        op
     } else {
         todo!("{opcode:0>8b}")
+    }
+}
+
+fn decode_mov(opcode: u8) -> Option<Op> {
+    if ((opcode >> 2) & 0b1111_11) == 0b1000_10 {
+        Some(Op::MOV(MOV::Reg(MovReg::new(opcode))))
+    } else if ((opcode >> 4) & 0b1111) == 0b1011 {
+        Some(Op::MOV(MOV::ImmReg(ImmReg::new(opcode))))
+    } else if ((opcode >> 1) & 0b111_1111) == 0b110_0011 {
+        Some(Op::MOV(MOV::ImmRM(ImmRM::new(opcode))))
+    } else if ((opcode >> 1) & 0b111_1111) == 0b101_0000 {
+        Some(Op::MOV(MOV::MemAcc(MemAcc::new(opcode))))
+    } else if ((opcode >> 1) & 0b111_1111) == 0b101_0001 {
+        Some(Op::MOV(MOV::MemAcc(MemAcc::reversed(opcode))))
+    } else {
+        None
+    }
+}
+
+fn decode_add(opcode: u8) -> Option<Op> {
+    if ((opcode >> 2) & 0b1111_11) == 0 {
+        Some(Op::ADD(ADD::Add(Add::new(opcode))))
+    } else if ((opcode >> 2) & 0b1111_11) == 0b10_0000 {
+        Some(Op::ADD(ADD::IRM(IRM::new(opcode))))
+    } else if ((opcode >> 1) & 0b1111_111) == 0b000_0010 {
+        Some(Op::ADD(ADD::Acc(Acc::new(opcode))))
+    } else {
+        None
     }
 }
 
@@ -367,5 +398,10 @@ mod test {
     #[test]
     fn listing_40() {
         test_listing(40);
+    }
+
+    #[test]
+    fn listing_41() {
+        test_listing(41);
     }
 }
