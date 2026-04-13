@@ -6,7 +6,7 @@ mod mov;
 use mov::MOV;
 
 use crate::{
-    add::{ADD, Acc, Add, IRM},
+    add::{Acc, Arith, Imm, Reg, is_i_to_a, is_i_to_r, is_r_to_r},
     mov::{ImmRM, ImmReg, MemAcc, MovReg},
 };
 
@@ -217,21 +217,21 @@ impl Display for MemData {
 #[derive(Debug, Clone, Copy)]
 enum Op {
     MOV(MOV),
-    ADD(ADD),
+    Arith(Arith),
 }
 
 impl Op {
     fn decode(&mut self, b: u8) {
         match self {
             Self::MOV(m) => m.decode(b),
-            Self::ADD(a) => a.decode(b),
+            Self::Arith(a) => a.decode(b),
         }
     }
 
     fn done(&self) -> bool {
         match self {
             Self::MOV(m) => m.done(),
-            Self::ADD(a) => a.done(),
+            Self::Arith(a) => a.done(),
         }
     }
 }
@@ -240,7 +240,7 @@ impl Display for Op {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::MOV(m) => format!("{m}"),
-            Self::ADD(m) => format!("{m}"),
+            Self::Arith(m) => format!("{m}"),
         };
         write!(f, "{s}")
     }
@@ -314,6 +314,7 @@ impl From<u8> for REG {
     }
 }
 
+#[derive(Debug)]
 struct RegField {
     w: bool,
     reg: REG,
@@ -334,7 +335,7 @@ impl RegField {
 fn decode_op(opcode: u8) -> Op {
     if let Some(op) = decode_mov(opcode) {
         op
-    } else if let Some(op) = decode_add(opcode) {
+    } else if let Some(op) = decode_arithmetic(opcode) {
         op
     } else {
         todo!("{opcode:0>8b}")
@@ -357,13 +358,13 @@ fn decode_mov(opcode: u8) -> Option<Op> {
     }
 }
 
-fn decode_add(opcode: u8) -> Option<Op> {
-    if ((opcode >> 2) & 0b1111_11) == 0 {
-        Some(Op::ADD(ADD::Add(Add::new(opcode))))
-    } else if ((opcode >> 2) & 0b1111_11) == 0b10_0000 {
-        Some(Op::ADD(ADD::IRM(IRM::new(opcode))))
-    } else if ((opcode >> 1) & 0b1111_111) == 0b000_0010 {
-        Some(Op::ADD(ADD::Acc(Acc::new(opcode))))
+fn decode_arithmetic(b: u8) -> Option<Op> {
+    if is_r_to_r(b) {
+        Some(Op::Arith(Arith::Reg(Reg::new(b))))
+    } else if is_i_to_r(b) {
+        Some(Op::Arith(Arith::Imm(Imm::new(b))))
+    } else if is_i_to_a(b) {
+        Some(Op::Arith(Arith::Acc(Acc::new(b))))
     } else {
         None
     }

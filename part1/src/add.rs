@@ -3,35 +3,35 @@ use std::fmt::Display;
 use crate::{MOD, MemData, REG, RM, RegField, SBF};
 
 #[derive(Debug, Clone, Copy)]
-pub enum ADD {
-    Add(Add),
-    IRM(IRM),
+pub enum Arith {
+    Reg(Reg),
+    Imm(Imm),
     Acc(Acc),
 }
 
-impl ADD {
+impl Arith {
     pub fn done(&self) -> bool {
         match self {
-            Self::Add(a) => a.done(),
-            Self::IRM(irm) => irm.done(),
+            Self::Reg(a) => a.done(),
+            Self::Imm(irm) => irm.done(),
             Self::Acc(a) => a.done(),
         }
     }
 
     pub fn decode(&mut self, b: u8) {
         match self {
-            Self::Add(a) => a.decode(b),
-            Self::IRM(irm) => irm.decode(b),
+            Self::Reg(a) => a.decode(b),
+            Self::Imm(irm) => irm.decode(b),
             Self::Acc(a) => a.decode(b),
         }
     }
 }
 
-impl Display for ADD {
+impl Display for Arith {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Self::Add(a) => format!("{a}"),
-            Self::IRM(irm) => format!("{irm}"),
+            Self::Reg(a) => format!("{a}"),
+            Self::Imm(irm) => format!("{irm}"),
             Self::Acc(a) => format!("{a}"),
         };
         write!(f, "{s}")
@@ -39,7 +39,8 @@ impl Display for ADD {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Add {
+pub struct Reg {
+    op: Op,
     w: SBF,
     d: SBF,
     data: Option<u8>,
@@ -48,11 +49,13 @@ pub struct Add {
     done: bool,
 }
 
-impl Add {
+impl Reg {
     pub fn new(opcode: u8) -> Self {
+        let op = ((opcode >> 3) & 7).into();
         let w: SBF = (opcode & 1).into();
         let d: SBF = ((opcode >> 1) & 1).into();
         Self {
+            op,
             w,
             d,
             data: None,
@@ -195,9 +198,13 @@ impl Add {
     }
 }
 
-impl Display for Add {
+impl Display for Reg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = String::from("add ");
+        let mut s = match self.op {
+            Op::Add => String::from("add "),
+            Op::Sub => String::from("sub "),
+            Op::Cmp => String::from("cmp "),
+        };
         let reg = self.reg();
         let rm = self.rm();
         if self.d.0 {
@@ -210,7 +217,8 @@ impl Display for Add {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct IRM {
+pub struct Imm {
+    op: Option<Op>,
     w: SBF,
     s: SBF,
     data: Option<u8>,
@@ -221,11 +229,12 @@ pub struct IRM {
     done: bool,
 }
 
-impl IRM {
+impl Imm {
     pub fn new(opcode: u8) -> Self {
         let w: SBF = (opcode & 1).into();
         let s: SBF = ((opcode >> 1) & 1).into();
         Self {
+            op: None,
             w,
             s,
             data: None,
@@ -244,15 +253,16 @@ impl IRM {
     pub fn decode(&mut self, b: u8) {
         if self.data == None {
             self.data = Some(b);
+            self.op = Some(((b >> 3) & 7).into());
         } else {
             match self.r#mod() {
                 MOD::Reg => {
                     if self.d0 == None {
                         self.d0 = Some(b);
-                        if !self.w.0 || self.s.0 {
+                        if self.sw() {
                             self.done = true;
                         }
-                    } else if (!self.w.0 || self.s.0) && self.d1 == None {
+                    } else if self.sw() && self.d1 == None {
                         self.d1 = Some(b);
                         self.done = true
                     }
@@ -267,7 +277,7 @@ impl IRM {
                                 self.hi = Some(b);
                             } else if self.d0 == None {
                                 self.d0 = Some(b);
-                                if !self.w.0 {
+                                if self.sw() {
                                     self.done = true;
                                 }
                             } else if self.d1 == None {
@@ -278,11 +288,10 @@ impl IRM {
                         _ => {
                             if self.d0 == None {
                                 self.d0 = Some(b);
-
-                                if !self.w.0 || self.s.0 {
+                                if self.sw() {
                                     self.done = true;
                                 }
-                            } else if (!self.w.0 || self.s.0) && self.d1 == None {
+                            } else if self.sw() && self.d1 == None {
                                 self.d1 = Some(b);
 
                                 self.done = true
@@ -298,7 +307,7 @@ impl IRM {
                         if !self.w.0 {
                             self.done = true;
                         }
-                    } else if (!self.w.0 || self.s.0) && self.d1 == None {
+                    } else if self.sw() && self.d1 == None {
                         self.d1 = Some(b);
                         self.done = true
                     }
@@ -310,10 +319,10 @@ impl IRM {
                         self.hi = Some(b);
                     } else if self.d0 == None {
                         self.d0 = Some(b);
-                        if !self.w.0 || self.s.0 {
+                        if self.sw() {
                             self.done = true;
                         }
-                    } else if (!self.w.0 || self.s.0) && self.d1 == None {
+                    } else if self.sw() && self.d1 == None {
                         self.d1 = Some(b);
                         self.done = true
                     }
@@ -326,6 +335,16 @@ impl IRM {
         match self.data {
             None => panic!("data is None"),
             Some(d) => ((d >> 6) & 0x3).into(),
+        }
+    }
+
+    pub fn sw(&self) -> bool {
+        match self.op {
+            None => false,
+            Some(op) => match op {
+                Op::Add | Op::Sub | Op::Cmp => !self.w.0 || self.s.0,
+                //Op::Cmp => !self.w.0 || !self.s.0,
+            },
         }
     }
 
@@ -356,7 +375,7 @@ impl IRM {
         if let Some(lo) = self.d0 {
             val = lo as u16;
         }
-        if (!self.w.0 || self.s.0)
+        if self.sw()
             && let Some(hi) = self.d1
         {
             val = ((hi as u16) << 8) | val;
@@ -400,9 +419,16 @@ impl IRM {
     }
 }
 
-impl Display for IRM {
+impl Display for Imm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = String::from("add ");
+        let mut s = match self.op {
+            Some(op) => match op {
+                Op::Add => String::from("add "),
+                Op::Sub => String::from("sub "),
+                Op::Cmp => String::from("cmp "),
+            },
+            None => panic!("op is None"),
+        };
         let rm = self.rm();
         match rm {
             RM::Byte(_, _) => s.push_str(format!("byte {rm}").as_str()),
@@ -418,8 +444,8 @@ impl Display for IRM {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Acc {
+    op: Op,
     w: SBF,
-    data: Option<u8>,
     d0: Option<u8>,
     d1: Option<u8>,
     done: bool,
@@ -429,8 +455,8 @@ impl Acc {
     pub fn new(opcode: u8) -> Self {
         let w: SBF = (opcode & 1).into();
         Self {
+            op: ((opcode >> 3) & 7).into(),
             w,
-            data: None,
             d0: None,
             d1: None,
             done: false,
@@ -470,10 +496,14 @@ impl Acc {
 
 impl Display for Acc {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = String::from("add ");
+        let mut s = match self.op {
+            Op::Add => String::from("add "),
+            Op::Sub => String::from("sub "),
+            Op::Cmp => String::from("cmp "),
+        };
         match self.w.0 {
-            true => s.push_str("al, "),
-            false => s.push_str("ax, "),
+            true => s.push_str("ax, "),
+            false => s.push_str("al, "),
         }
         let imm = self.imm();
         match self.w.0 {
@@ -481,5 +511,44 @@ impl Display for Acc {
             false => s.push_str(format!("{}", imm as i16).as_str()),
         }
         write!(f, "{s}")
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Op {
+    Add,
+    Sub,
+    Cmp,
+}
+
+impl From<u8> for Op {
+    fn from(v: u8) -> Self {
+        match v {
+            0 => Op::Add,
+            0b101 => Op::Sub,
+            0b111 => Op::Cmp,
+            _ => panic!("invalid {}", v),
+        }
+    }
+}
+
+pub fn is_r_to_r(b: u8) -> bool {
+    match (b >> 2) & 0b1111_11 {
+        0 | 0b00_1010 | 0b00_1110 => true,
+        _ => false,
+    }
+}
+
+pub fn is_i_to_r(b: u8) -> bool {
+    match (b >> 2) & 0b1111_11 {
+        0b10_0000 => true,
+        _ => false,
+    }
+}
+
+pub fn is_i_to_a(b: u8) -> bool {
+    match (b >> 1) & 0b1111_111 {
+        0b000_0010 | 0b0010_110 | 0b0011_110 => true,
+        _ => false,
     }
 }
