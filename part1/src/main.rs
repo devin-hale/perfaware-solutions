@@ -2,11 +2,13 @@ use clap::Parser;
 use std::{env::current_dir, fmt::Display, fs, io::Write, process::Command};
 
 mod add;
+mod jmp;
 mod mov;
 use mov::MOV;
 
 use crate::{
     add::{Acc, Arith, Imm, Reg, is_i_to_a, is_i_to_r, is_r_to_r},
+    jmp::{JMP, JmpRegistry},
     mov::{ImmRM, ImmReg, MemAcc, MovReg},
 };
 
@@ -29,27 +31,37 @@ fn get_listing(listing: u8) -> Vec<u8> {
 }
 
 fn disassemble(asm: &[u8]) -> String {
-    let mut dasm = String::from("bits 16\n");
+    let mut jmp_registry = JmpRegistry::new();
+    let mut dasm = vec![String::from("bits 16")];
     let mut current_op: Option<Op> = None;
-    for b in asm {
+    let mut iter = asm.iter();
+    while let Some(b) = iter.next() {
         match current_op {
             None => {
-                dasm.push_str("\n");
-                current_op = Some(decode_op(*b));
-            }
-            Some(mut op) => {
-                op.decode(*b);
+                let op = decode_op(*b, &mut iter, &mut jmp_registry);
                 if op.done() {
                     println!("{op}");
-                    dasm.push_str(format!("{op}").as_str());
+                    dasm.push(format!("{op}"));
+                } else {
+                    current_op = Some(op);
+                }
+            }
+            Some(mut op) => {
+                if !op.done() {
+                    op.decode(*b);
+                }
+                if op.done() {
+                    println!("{op}");
+                    dasm.push(format!("{op}"));
                     current_op = None;
                 } else {
                     current_op = Some(op);
                 }
             }
         }
+        jmp_registry.decrement_all();
     }
-    dasm
+    dasm.join("\n")
 }
 
 fn assemble(dasm: &str) -> Vec<u8> {
@@ -214,10 +226,11 @@ impl Display for MemData {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Op {
     MOV(MOV),
     Arith(Arith),
+    JMP(JMP),
 }
 
 impl Op {
@@ -225,6 +238,7 @@ impl Op {
         match self {
             Self::MOV(m) => m.decode(b),
             Self::Arith(a) => a.decode(b),
+            _ => todo!(),
         }
     }
 
@@ -232,6 +246,7 @@ impl Op {
         match self {
             Self::MOV(m) => m.done(),
             Self::Arith(a) => a.done(),
+            Self::JMP(_) => true,
         }
     }
 }
@@ -241,6 +256,7 @@ impl Display for Op {
         let s = match self {
             Self::MOV(m) => format!("{m}"),
             Self::Arith(m) => format!("{m}"),
+            Self::JMP(jmp) => format!("{jmp}"),
         };
         write!(f, "{s}")
     }
@@ -332,11 +348,16 @@ impl RegField {
     }
 }
 
-fn decode_op(opcode: u8) -> Op {
+fn decode_op<'a, I>(opcode: u8, iter: I, jr: &mut JmpRegistry) -> Op
+where
+    I: Iterator<Item = &'a u8>,
+{
     if let Some(op) = decode_mov(opcode) {
         op
     } else if let Some(op) = decode_arithmetic(opcode) {
         op
+    } else if let Some(op) = JMP::decode(opcode, iter, jr) {
+        Op::JMP(op)
     } else {
         todo!("{opcode:0>8b}")
     }
