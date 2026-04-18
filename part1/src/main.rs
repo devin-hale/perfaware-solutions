@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::{env::current_dir, fmt::Display, fs, io::Write, process::Command};
+use std::{env::current_dir, fmt::Display, fs, io::Write, iter::Enumerate, process::Command};
 
 mod add;
 mod jmp;
@@ -30,18 +30,36 @@ fn get_listing(listing: u8) -> Vec<u8> {
     fs::read(path).unwrap()
 }
 
+struct Dissassembly {
+    pub bits: u8,
+    pub jr: JmpRegistry,
+    pub ops: Vec<Op>,
+}
+
+impl Display for Dissassembly {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ops: Vec<String> = self.ops.iter().map(|o| o.to_string()).collect();
+        let s = vec![format!("bits {}", self.bits), ops.join("\n")].join("\n");
+        write!(f, "{s}")
+    }
+}
+
 fn disassemble(asm: &[u8]) -> String {
-    let mut jmp_registry = JmpRegistry::new();
-    let mut dasm = vec![String::from("bits 16")];
+    let jmp_registry = JmpRegistry::new();
+    let mut dasm = Dissassembly {
+        bits: 16,
+        ops: vec![],
+        jr: jmp_registry,
+    };
     let mut current_op: Option<Op> = None;
-    let mut iter = asm.iter();
-    while let Some(b) = iter.next() {
+    let mut iter = asm.iter().enumerate();
+
+    while let Some((_, b)) = iter.next() {
         match current_op {
             None => {
-                let op = decode_op(*b, &mut iter, &mut jmp_registry);
+                let op = decode_op(*b, &mut iter, &mut dasm.jr);
                 if op.done() {
-                    println!("{op}");
-                    dasm.push(format!("{op}"));
+                    dasm.ops.push(op);
                 } else {
                     current_op = Some(op);
                 }
@@ -51,17 +69,15 @@ fn disassemble(asm: &[u8]) -> String {
                     op.decode(*b);
                 }
                 if op.done() {
-                    println!("{op}");
-                    dasm.push(format!("{op}"));
+                    dasm.ops.push(op);
                     current_op = None;
                 } else {
                     current_op = Some(op);
                 }
             }
         }
-        jmp_registry.decrement_all();
     }
-    dasm.join("\n")
+    dasm.to_string()
 }
 
 fn assemble(dasm: &str) -> Vec<u8> {
@@ -348,10 +364,7 @@ impl RegField {
     }
 }
 
-fn decode_op<'a, I>(opcode: u8, iter: I, jr: &mut JmpRegistry) -> Op
-where
-    I: Iterator<Item = &'a u8>,
-{
+fn decode_op(opcode: u8, iter: &mut Enumerate<std::slice::Iter<u8>>, jr: &mut JmpRegistry) -> Op {
     if let Some(op) = decode_mov(opcode) {
         op
     } else if let Some(op) = decode_arithmetic(opcode) {

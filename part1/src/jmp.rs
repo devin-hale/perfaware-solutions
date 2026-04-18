@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap, fmt::Display, iter::Enumerate};
 
 pub struct JmpRegistry {
     current_label: u8,
@@ -13,12 +13,19 @@ impl JmpRegistry {
         }
     }
 
-    pub fn decrement_all(&mut self) {
-        let keys: Vec<i8> = self.map.keys().map(|i| *i).collect();
+    pub fn take(&mut self, addr: &i8) -> String {
+        let label = self.map.remove(addr).unwrap().clone();
+
+        let keys = self.keys();
         for k in keys {
-            let val = self.map.remove(&k).unwrap();
-            self.map.insert(k - 2, val);
+            let l = self.map.remove(&k).unwrap();
+            if k > *addr {}
         }
+        label
+    }
+
+    fn keys(&self) -> Vec<i8> {
+        self.map.keys().map(|i| *i).collect()
     }
 
     fn get_or_register(&mut self, addr: &i8) -> String {
@@ -34,177 +41,130 @@ impl JmpRegistry {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum JMPType {
+    JE,
+    JNZ,
+    JL,
+    JLE,
+    JB,
+    JBE,
+    JP,
+    JO,
+    JS,
+    JNL,
+    JG,
+    JNB,
+    JA,
+    JNP,
+    JNO,
+    JNS,
+    LOOP,
+    LOOPZ,
+    LOOPNZ,
+    JCXZ,
+}
+
 #[derive(Debug, Clone)]
-pub enum JMP {
-    JE(String, i8),
-    JNZ(String, i8),
-    JL(String, i8),
-    JLE(String, i8),
-    JB(String, i8),
-    JBE(String, i8),
-    JP(String, i8),
-    JO(String, i8),
-    JS(String, i8),
-    JNL(String, i8),
-    JG(String, i8),
-    JNB(String, i8),
-    JA(String, i8),
-    JNP(String, i8),
-    JNO(String, i8),
-    JNS(String, i8),
-    LOOP(String, i8),
-    LOOPZ(String, i8),
-    LOOPNZ(String, i8),
-    JCXZ(String, i8),
+pub struct JMP {
+    jmp_type: JMPType,
+    label: String,
+    offset: i8,
 }
 
 impl JMP {
-    pub fn decode<'a, I>(b: u8, mut iter: I, jr: &mut JmpRegistry) -> Option<JMP>
-    where
-        I: Iterator<Item = &'a u8>,
-    {
-        let mut jmp: JMP = b.try_into().unwrap();
-        let addr = *iter.next().unwrap_or(&0) as i8;
-        let label = jr.get_or_register(&addr);
-        match &mut jmp {
-            JMP::JE(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JNZ(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JL(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JLE(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JB(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JBE(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JP(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JO(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JS(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JNL(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JG(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JNB(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JA(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::LOOP(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JNP(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JNO(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JNS(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::LOOPZ(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::LOOPNZ(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-            JMP::JCXZ(a, o) => {
-                *a = label;
-                *o = addr;
-            }
-        }
-        Some(jmp)
+    pub fn decode(
+        b: u8,
+        iter: &mut Enumerate<std::slice::Iter<u8>>,
+        jr: &mut JmpRegistry,
+    ) -> Option<JMP> {
+        let jmp_type: JMPType = b.try_into().unwrap();
+
+        let (next_i, offset) = iter.next().unwrap() as (usize, &u8);
+        let offset = *offset as i8;
+        let absolute = next_i as i8 + offset;
+        let label = jr.get_or_register(&absolute);
+
+        Some(JMP {
+            jmp_type,
+            label,
+            offset,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<String> {
+        vec![self.jmp_type.into(), self.label.clone()]
     }
 }
 
-impl TryFrom<u8> for JMP {
+impl TryFrom<u8> for JMPType {
     type Error = String;
     fn try_from(val: u8) -> Result<Self, Self::Error> {
         match val {
-            0b0111_0100 => Ok(JMP::JE(String::new(), 0)),
-            0b0111_0101 => Ok(JMP::JNZ(String::new(), 0)),
-            0b0111_1100 => Ok(JMP::JL(String::new(), 0)),
-            0b0111_1110 => Ok(JMP::JLE(String::new(), 0)),
-            0b0111_0010 => Ok(JMP::JB(String::new(), 0)),
-            0b0111_0110 => Ok(JMP::JBE(String::new(), 0)),
-            0b0111_1010 => Ok(JMP::JP(String::new(), 0)),
-            0b0111_0000 => Ok(JMP::JO(String::new(), 0)),
-            0b0111_1000 => Ok(JMP::JS(String::new(), 0)),
-            0b0111_1101 => Ok(JMP::JNL(String::new(), 0)),
-            0b0111_1111 => Ok(JMP::JG(String::new(), 0)),
-            0b0111_0011 => Ok(JMP::JNB(String::new(), 0)),
-            0b0111_0111 => Ok(JMP::JA(String::new(), 0)),
-            0b1110_0010 => Ok(JMP::LOOP(String::new(), 0)),
-            0b0111_1011 => Ok(JMP::JNP(String::new(), 0)),
-            0b0111_0001 => Ok(JMP::JNO(String::new(), 0)),
-            0b0111_1001 => Ok(JMP::JNS(String::new(), 0)),
-            0b1110_0001 => Ok(JMP::LOOPZ(String::new(), 0)),
-            0b1110_0000 => Ok(JMP::LOOPNZ(String::new(), 0)),
-            0b1110_0011 => Ok(JMP::JCXZ(String::new(), 0)),
-            _ => Err(format!("invalid JMP: {val}")),
+            0b0111_0100 => Ok(JMPType::JE),
+            0b0111_0101 => Ok(JMPType::JNZ),
+            0b0111_1100 => Ok(JMPType::JL),
+            0b0111_1110 => Ok(JMPType::JLE),
+            0b0111_0010 => Ok(JMPType::JB),
+            0b0111_0110 => Ok(JMPType::JBE),
+            0b0111_1010 => Ok(JMPType::JP),
+            0b0111_0000 => Ok(JMPType::JO),
+            0b0111_1000 => Ok(JMPType::JS),
+            0b0111_1101 => Ok(JMPType::JNL),
+            0b0111_1111 => Ok(JMPType::JG),
+            0b0111_0011 => Ok(JMPType::JNB),
+            0b0111_0111 => Ok(JMPType::JA),
+            0b1110_0010 => Ok(JMPType::LOOP),
+            0b0111_1011 => Ok(JMPType::JNP),
+            0b0111_0001 => Ok(JMPType::JNO),
+            0b0111_1001 => Ok(JMPType::JNS),
+            0b1110_0001 => Ok(JMPType::LOOPZ),
+            0b1110_0000 => Ok(JMPType::LOOPNZ),
+            0b1110_0011 => Ok(JMPType::JCXZ),
+            _ => Err(format!("invalid JMPType: {val}")),
         }
+    }
+}
+
+impl From<JMPType> for String {
+    fn from(jt: JMPType) -> Self {
+        match jt {
+            JMPType::JE => "je".to_string(),
+            JMPType::JNZ => "jne".to_string(),
+            JMPType::JL => "jl".to_string(),
+            JMPType::JLE => "jle".to_string(),
+            JMPType::JB => "jb".to_string(),
+            JMPType::JBE => "jbe".to_string(),
+            JMPType::JP => "jp".to_string(),
+            JMPType::JO => "jo".to_string(),
+            JMPType::JS => "js".to_string(),
+            JMPType::JNL => "jnl".to_string(),
+            JMPType::JG => "jg".to_string(),
+            JMPType::JNB => "jnb".to_string(),
+            JMPType::JA => "ja".to_string(),
+            JMPType::JNP => "jnp".to_string(),
+            JMPType::JNO => "jno".to_string(),
+            JMPType::JNS => "jns".to_string(),
+            JMPType::LOOP => "loop".to_string(),
+            JMPType::LOOPZ => "loopz".to_string(),
+            JMPType::LOOPNZ => "loopnz".to_string(),
+            JMPType::JCXZ => "jcxz".to_string(),
+        }
+    }
+}
+
+impl From<JMP> for String {
+    fn from(j: JMP) -> Self {
+        let mut s = j.to_bytes().join(" ");
+        s.push_str(format!("; {}", j.offset).as_str());
+        s
     }
 }
 
 impl Display for JMP {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            JMP::JE(l, o) => format!("je {l}; {o}"),
-            JMP::JNZ(l, o) => format!("jne {l}; {o}"),
-            JMP::JL(l, o) => format!("jl {l}; {o}"),
-            JMP::JLE(l, o) => format!("jle {l}; {o}"),
-            JMP::JB(l, o) => format!("jb {l}; {o}"),
-            JMP::JBE(l, o) => format!("jbe {l}; {o}"),
-            JMP::JP(l, o) => format!("jp {l}; {o}"),
-            JMP::JO(l, o) => format!("jo {l}; {o}"),
-            JMP::JS(l, o) => format!("js {l}; {o}"),
-            JMP::JNL(l, o) => format!("jnl {l}; {o}"),
-            JMP::JG(l, o) => format!("jg {l}; {o}"),
-            JMP::JNB(l, o) => format!("jnb {l}; {o}"),
-            JMP::JA(l, o) => format!("ja {l}; {o}"),
-            JMP::JNP(l, o) => format!("jnp {l}; {o}"),
-            JMP::JNO(l, o) => format!("jno {l}; {o}"),
-            JMP::JNS(l, o) => format!("jns {l}; {o}"),
-            JMP::LOOP(l, o) => format!("loop {l}; {o}"),
-            JMP::LOOPZ(l, o) => format!("loopz {l}; {o}"),
-            JMP::LOOPNZ(l, o) => format!("loopnz {l}; {o}"),
-            JMP::JCXZ(l, o) => format!("jcxz {l}; {o}"),
-        };
+        let mut s = self.to_bytes().join(" ");
+        s.push_str(format!("; {}", self.offset).as_str());
         write!(f, "{s}")
     }
 }
