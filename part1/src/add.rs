@@ -1,6 +1,70 @@
-use std::fmt::Display;
+use std::{fmt::Display, iter::Enumerate};
 
 use crate::{MOD, MemData, REG, RM, RegField, SBF};
+
+pub struct Arithmetic {
+    a_type: Option<ArithmeticType>,
+    reg_mov: RegMovement,
+}
+
+impl Arithmetic {
+    fn new(b: u8, iter: Enumerate<std::slice::Iter<u8>>) -> Self {
+        let a_type: Option<ArithmeticType> = b.try_into().ok();
+        let reg_mov: RegMovement = b.into();
+        let arith = Self { a_type, reg_mov };
+
+        arith
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ArithmeticType {
+    Add,
+    Sub,
+    Cmp,
+}
+
+impl TryFrom<u8> for ArithmeticType {
+    type Error = ();
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        match v {
+            0 => Ok(Self::Add),
+            0b101 => Ok(Self::Sub),
+            0b111 => Ok(Self::Cmp),
+            _ => Err(()),
+        }
+    }
+}
+
+impl Display for ArithmeticType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Cmp => "cmp",
+        };
+        write!(f, "{s}")
+    }
+}
+
+pub enum RegMovement {
+    Reg,
+    Imm,
+    Acc,
+}
+
+impl From<u8> for RegMovement {
+    fn from(b: u8) -> Self {
+        match (b >> 2) & 0b1111_11 {
+            0 | 0b00_1010 | 0b00_1110 => Self::Reg,
+            0b10_0000 => Self::Imm,
+            _ => match (b >> 1) & 0b1111_111 {
+                0b000_0010 | 0b0010_110 | 0b0011_110 => Self::Acc,
+                _ => panic!("invalid RegMovement: {b}"),
+            },
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Arith {
