@@ -7,7 +7,7 @@ mod mov;
 use mov::MOV;
 
 use crate::{
-    add::{Acc, Arith, Imm, Reg, is_i_to_a, is_i_to_r, is_r_to_r},
+    add::{Acc, Arith, Arithmetic, Imm, is_i_to_a, is_i_to_r},
     jmp::{JMP, JmpRegistry},
     mov::{ImmRM, ImmReg, MemAcc, MovReg},
 };
@@ -246,6 +246,7 @@ impl Display for MemData {
 enum Op {
     MOV(MOV),
     Arith(Arith),
+    Arithmetic(Arithmetic),
     JMP(JMP),
 }
 
@@ -262,6 +263,7 @@ impl Op {
         match self {
             Self::MOV(m) => m.done(),
             Self::Arith(a) => a.done(),
+            Self::Arithmetic(_) => true,
             Self::JMP(_) => true,
         }
     }
@@ -270,9 +272,10 @@ impl Op {
 impl Display for Op {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
-            Self::MOV(m) => format!("{m}"),
-            Self::Arith(m) => format!("{m}"),
-            Self::JMP(jmp) => format!("{jmp}"),
+            Self::MOV(m) => m.to_string(),
+            Self::Arith(m) => m.to_string(),
+            Self::Arithmetic(a) => a.to_string(),
+            Self::JMP(jmp) => jmp.to_string(),
         };
         write!(f, "{s}")
     }
@@ -367,7 +370,7 @@ impl RegField {
 fn decode_op(opcode: u8, iter: &mut Enumerate<std::slice::Iter<u8>>, jr: &mut JmpRegistry) -> Op {
     if let Some(op) = decode_mov(opcode) {
         op
-    } else if let Some(op) = decode_arithmetic(opcode) {
+    } else if let Some(op) = decode_arithmetic(opcode, iter) {
         op
     } else if let Some(op) = JMP::decode(opcode, iter, jr) {
         Op::JMP(op)
@@ -392,9 +395,9 @@ fn decode_mov(opcode: u8) -> Option<Op> {
     }
 }
 
-fn decode_arithmetic(b: u8) -> Option<Op> {
-    if is_r_to_r(b) {
-        Some(Op::Arith(Arith::Reg(Reg::new(b))))
+fn decode_arithmetic(b: u8, iter: &mut Enumerate<std::slice::Iter<u8>>) -> Option<Op> {
+    if let Some(op) = Arithmetic::new(b, iter) {
+        Some(Op::Arithmetic(op))
     } else if is_i_to_r(b) {
         Some(Op::Arith(Arith::Imm(Imm::new(b))))
     } else if is_i_to_a(b) {
