@@ -79,7 +79,7 @@ fn ref_haversine(x0: f64, y0: f64, x1: f64, y1: f64, earth_radius: f64) -> f64 {
 }
 
 fn generate_haversine_io() {
-    let set_len: usize = 10_000_000;
+    let set_len: usize = 1_000_000;
     let pairs = CoordPair::rand_set_clustered(set_len);
 
     let haversines: Vec<f64> = pairs
@@ -258,7 +258,7 @@ fn tokenize(json: String) -> Result<Vec<Token>, String> {
 
     let mut iter = json.chars().into_iter().peekable();
     while let Some(c) = iter.next() {
-        if c == ' ' {
+        if c == ' ' || c == '\n' {
             continue;
         }
         let token = match c {
@@ -268,12 +268,12 @@ fn tokenize(json: String) -> Result<Vec<Token>, String> {
             ']' => Token::BracketClose,
             ':' => Token::Colon,
             ',' => Token::Comma,
-            '0'..='9' => Token::Number(tokenize_number(c, &mut iter)?),
+            '0'..='9' | '-' => Token::Number(tokenize_number(c, &mut iter)?),
             '"' => Token::String(tokenize_str(&mut iter)?),
             't' => tokenize_true(&mut iter)?,
             'f' => tokenize_false(&mut iter)?,
             'n' => tokenize_null(&mut iter)?,
-            _ => return Err(String::from("invalid character")),
+            _ => panic!("invalid char {}", c.clone()),
         };
         tokens.push(token);
     }
@@ -367,9 +367,8 @@ fn parse_json(s: String) -> JSON {
 }
 
 fn main() {
-    //let hp_str = fs::read_to_string("./haversine_pairs.json").unwrap();
-    
-    let js = String::from("[\"yeah\", true, false, null]");
-    let json = parse_json(js.clone());
+    generate_haversine_io();
+    let hp_str = fs::read_to_string("./haversine_pairs.json").unwrap();
+    let json = parse_json(hp_str);
     println!("{:?}", json);
 }
