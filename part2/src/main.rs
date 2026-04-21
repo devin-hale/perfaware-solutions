@@ -1,10 +1,16 @@
-use std::{collections::HashMap, env, error::Error, fmt::Display, fs, iter::Peekable, str::Chars};
+use std::{
+    collections::HashMap,
+    env,
+    error::Error,
+    fmt::Display,
+    fs,
+    iter::Peekable,
+    str::Chars,
+    time::{Duration, Instant},
+};
 
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
-
-const H_JSON: &str = "./haversine.json";
-const H_CALCS: &str = "./haversine.f64";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CoordPair {
@@ -105,7 +111,7 @@ fn ref_haversine(x0: f64, y0: f64, x1: f64, y1: f64, earth_radius: f64) -> f64 {
     result
 }
 
-fn generate_haversine_io(set_len: usize) {
+fn generate_haversine_io(set_len: usize, output: &str) {
     let pairs = CoordPair::rand_set_clustered(set_len);
 
     let mut haversines = vec![];
@@ -129,16 +135,16 @@ fn generate_haversine_io(set_len: usize) {
     }
     let calc_str = calcs.join("\n");
 
-    fs::write(H_JSON, pair_json).unwrap();
-    fs::write(H_CALCS, calc_str).unwrap();
+    fs::write(format!("{output}.json"), pair_json).unwrap();
+    fs::write(format!("{output}.f64"), calc_str).unwrap();
 }
 
-fn get_haversine_json() -> String {
-    fs::read_to_string(H_JSON).unwrap()
+fn get_haversine_json(input: &str) -> String {
+    fs::read_to_string(format!("{input}.json")).unwrap()
 }
 
-fn get_haversine_calcs() -> Vec<f64> {
-    let s = fs::read_to_string(H_CALCS).unwrap();
+fn get_haversine_calcs(input: &str) -> Vec<f64> {
+    let s = fs::read_to_string(format!("{input}.f64")).unwrap();
     s.split("\n")
         .map(|n| {
             let f: f64 = n.parse().unwrap();
@@ -455,6 +461,32 @@ struct Results {
     results_avg: f64,
     ref_avg: f64,
     difference: f64,
+    start: Instant,
+    end: Instant,
+}
+
+impl Results {
+    fn dur(&self) -> String {
+        let dur = self.end - self.start;
+
+        let ns = dur.as_nanos();
+        if ns < 1000 {
+            return format!("{ns}ns");
+        }
+
+        let us = dur.as_micros();
+        if us < 1000 {
+            return format!("{us}us");
+        }
+
+        let ms = dur.as_millis();
+        if ms < 1000 {
+            return format!("{ms}ms");
+        }
+
+        let s = dur.as_secs_f64();
+        return format!("{s}s");
+    }
 }
 
 impl Display for Results {
@@ -464,6 +496,7 @@ impl Display for Results {
             format!("Pair Count: {}", self.pair_count),
             format!("Results Match: {}", self.results_match),
             format!("Haversine Sum: {}", self.results_avg),
+            format!("Duration: {}", self.dur()),
             String::from(""),
             String::from("Validation:"),
             format!("Reference Sum: {}", self.ref_avg),
@@ -474,9 +507,27 @@ impl Display for Results {
     }
 }
 
-fn parse_haversine_ref() -> Result<Results, Box<dyn Error>> {
-    let hj = get_haversine_json();
-    let ref_results = get_haversine_calcs();
+// bin gen <num> <output>
+fn generate(args: &[String]) -> Result<(), Box<dyn Error>> {
+    assert_eq!(args.len(), 4);
+    let num: usize = args[2].parse().unwrap();
+    let output = args[3].clone();
+
+    generate_haversine_io(num, &output);
+
+    Ok(())
+}
+
+// bin ref <input>
+// looks for <input>.json and <input>.f64
+fn ref_alg(args: &[String]) -> Result<(), Box<dyn Error>> {
+    assert_eq!(args.len(), 3);
+    let input = args[2].clone();
+
+    let start = Instant::now();
+
+    let hj = get_haversine_json(&input);
+    let ref_results = get_haversine_calcs(&input);
     let mut results = vec![];
     let pairs = parse_pairs(&hj)?;
     for p in &pairs {
@@ -486,17 +537,21 @@ fn parse_haversine_ref() -> Result<Results, Box<dyn Error>> {
 
     let ref_avg = ref_results.iter().sum::<f64>() / ref_results.len() as f64;
     let results_avg = results.iter().sum::<f64>() / results.len() as f64;
+    let end = Instant::now();
 
     let r = Results {
-        input_size: hj.as_bytes().len() / (1000 * 1000),
+        input_size: hj.as_bytes().len(),
         pair_count: pairs.len(),
         results_match,
         results_avg,
         ref_avg,
         difference: (ref_avg - results_avg).abs(),
+        start,
+        end,
     };
+    println!("{r}");
 
-    Ok(r)
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -506,20 +561,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     match args[1].as_str() {
-        "gen" => {
-            let num: usize = args[2].parse().unwrap();
-            generate_haversine_io(num);
-        }
-        "ref" => {
-            let results = parse_haversine_ref()?;
-            println!("{results}");
-        }
+        "gen" => generate(&args)?,
+        "ref" => ref_alg(&args)?,
         _ => return Err(format!("invalid argument {}", args[1]).into()),
     }
     Ok(())
-
-    //generate_haversine_io();
-    //let hp_str = fs::read_to_string("./haversine_pairs.json").unwrap();
-    //let json = parse_json(hp_str);
-    //println!("{:?}", json);
 }
