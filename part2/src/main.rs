@@ -461,13 +461,35 @@ struct Results {
     results_avg: f64,
     ref_avg: f64,
     difference: f64,
-    start: Instant,
-    end: Instant,
+    json_parse_time: Duration,
+    haversine_calc_time: Duration,
 }
 
 impl Results {
-    fn dur(&self) -> String {
-        let dur = self.end - self.start;
+    fn json_parse_time(&self) -> String {
+        let dur = self.json_parse_time;
+
+        let ns = dur.as_nanos();
+        if ns < 1000 {
+            return format!("{ns}ns");
+        }
+
+        let us = dur.as_micros();
+        if us < 1000 {
+            return format!("{us}us");
+        }
+
+        let ms = dur.as_millis();
+        if ms < 1000 {
+            return format!("{ms}ms");
+        }
+
+        let s = dur.as_secs_f64();
+        return format!("{s}s");
+    }
+
+    fn haversine_calc_time(&self) -> String {
+        let dur = self.haversine_calc_time;
 
         let ns = dur.as_nanos();
         if ns < 1000 {
@@ -496,7 +518,8 @@ impl Display for Results {
             format!("Pair Count: {}", self.pair_count),
             format!("Results Match: {}", self.results_match),
             format!("Haversine Sum: {}", self.results_avg),
-            format!("Duration: {}", self.dur()),
+            format!("JSON Parse Time: {}", self.json_parse_time()),
+            format!("Haversine Calc Time: {}", self.haversine_calc_time()),
             String::from(""),
             String::from("Validation:"),
             format!("Reference Sum: {}", self.ref_avg),
@@ -524,20 +547,23 @@ fn ref_alg(args: &[String]) -> Result<(), Box<dyn Error>> {
     assert_eq!(args.len(), 3);
     let input = args[2].clone();
 
-    let start = Instant::now();
-
     let hj = get_haversine_json(&input);
     let ref_results = get_haversine_calcs(&input);
     let mut results = vec![];
+
+    let json_start = Instant::now();
     let pairs = parse_pairs(&hj)?;
+    let json_parse_time = json_start.elapsed();
+
+    let calc_start = Instant::now();
     for p in &pairs {
         results.push(ref_haversine(p.x0, p.y0, p.x1, p.y1, EARTH_RADIUS));
     }
+    let haversine_calc_time = calc_start.elapsed();
     let results_match = compare_results(&ref_results, &results);
 
     let ref_avg = ref_results.iter().sum::<f64>() / ref_results.len() as f64;
     let results_avg = results.iter().sum::<f64>() / results.len() as f64;
-    let end = Instant::now();
 
     let r = Results {
         input_size: hj.as_bytes().len(),
@@ -546,8 +572,8 @@ fn ref_alg(args: &[String]) -> Result<(), Box<dyn Error>> {
         results_avg,
         ref_avg,
         difference: (ref_avg - results_avg).abs(),
-        start,
-        end,
+        json_parse_time,
+        haversine_calc_time,
     };
     println!("{r}");
 
