@@ -1,9 +1,12 @@
-use std::{collections::HashMap, fs, iter::Peekable, str::Chars};
+use std::{collections::HashMap, env, error::Error, fmt::Display, fs, iter::Peekable, str::Chars};
 
 use rand::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+const H_JSON: &str = "./haversine.json";
+const H_CALCS: &str = "./haversine.f64";
+
+#[derive(Debug, Serialize, Deserialize)]
 struct CoordPair {
     x0: f64,
     y0: f64,
@@ -44,6 +47,30 @@ impl CoordPair {
 
         pairs
     }
+
+    fn from_json(j: &JSON) -> Result<CoordPair, String> {
+        if let JSON::Object(map) = j {
+            let x0 = match map.get("x0").ok_or(String::from("expected x0"))? {
+                JSON::Number(n) => *n,
+                other => return Err(String::from(format!("unexpected JSON value: {:?}", other))),
+            };
+            let y0 = match map.get("y0").ok_or(String::from("expected x0"))? {
+                JSON::Number(n) => *n,
+                other => return Err(String::from(format!("unexpected JSON value: {:?}", other))),
+            };
+            let x1 = match map.get("x1").ok_or(String::from("expected x0"))? {
+                JSON::Number(n) => *n,
+                other => return Err(String::from(format!("unexpected JSON value: {:?}", other))),
+            };
+            let y1 = match map.get("y1").ok_or(String::from("expected x0"))? {
+                JSON::Number(n) => *n,
+                other => return Err(String::from(format!("unexpected JSON value: {:?}", other))),
+            };
+            Ok(CoordPair { x0, y0, x1, y1 })
+        } else {
+            Err(String::from(format!("unexpected JSON value: {:?}", j)))
+        }
+    }
 }
 
 fn square(a: f64) -> f64 {
@@ -78,14 +105,15 @@ fn ref_haversine(x0: f64, y0: f64, x1: f64, y1: f64, earth_radius: f64) -> f64 {
     result
 }
 
-fn generate_haversine_io() {
-    let set_len: usize = 1_000_000;
+fn generate_haversine_io(set_len: usize) {
     let pairs = CoordPair::rand_set_clustered(set_len);
 
-    let haversines: Vec<f64> = pairs
-        .iter()
-        .map(|p| ref_haversine(p.x0, p.y0, p.x1, p.y1, EARTH_RADIUS))
-        .collect();
+    let mut haversines = vec![];
+    for i in 0..pairs.len() {
+        let p = &pairs[i];
+        let haver = ref_haversine(p.x0, p.y0, p.x1, p.y1, EARTH_RADIUS);
+        haversines.push(haver);
+    }
     let avg_sum = haversines.iter().sum::<f64>() / set_len as f64;
     println!("Pair Count: {set_len}");
     println!("Average Sum: {avg_sum}");
@@ -94,11 +122,29 @@ fn generate_haversine_io() {
         "pairs": serde_json::to_value(pairs).unwrap()
     });
     let pair_json = pair_json.to_string();
-    let calcs: Vec<String> = haversines.iter().map(|h| (*h).to_string()).collect();
+    let mut calcs = vec![];
+    for i in 0..haversines.len() {
+        let h = haversines[i];
+        calcs.push(h.to_string());
+    }
     let calc_str = calcs.join("\n");
 
-    fs::write("./haversine_pairs.json", pair_json).unwrap();
-    fs::write("./haversine_calcs.f64", calc_str).unwrap();
+    fs::write(H_JSON, pair_json).unwrap();
+    fs::write(H_CALCS, calc_str).unwrap();
+}
+
+fn get_haversine_json() -> String {
+    fs::read_to_string(H_JSON).unwrap()
+}
+
+fn get_haversine_calcs() -> Vec<f64> {
+    let s = fs::read_to_string(H_CALCS).unwrap();
+    s.split("\n")
+        .map(|n| {
+            let f: f64 = n.parse().unwrap();
+            f
+        })
+        .collect::<Vec<f64>>()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -133,6 +179,16 @@ fn tokenize_number(c: char, iter: &mut Peekable<Chars<'_>>) -> Result<f64, Strin
                 let ch = iter.next().unwrap();
                 s.push(ch);
                 prd = true;
+            }
+            'e' => {
+                iter.next().unwrap();
+                let mut scin = String::from("e");
+                let ch = iter.next().unwrap();
+                if ch != '-' {
+                    return Err(format!("expected '-'; got '{ch}'"));
+                }
+                scin.push(ch);
+                s.push_str(scin.as_str());
             }
             _ => break,
         }
@@ -253,10 +309,7 @@ fn tokenize_null(iter: &mut Peekable<Chars<'_>>) -> Result<Token, String> {
     Ok(Token::Null)
 }
 
-fn tokenize(json: String) -> Result<Vec<Token>, String> {
-    let mut tokens = vec![];
-
-    let mut iter = json.chars().into_iter().peekable();
+fn get_token(iter: &mut Peekable<Chars<'_>>) -> Result<Option<Token>, String> {
     while let Some(c) = iter.next() {
         if c == ' ' || c == '\n' {
             continue;
@@ -268,16 +321,18 @@ fn tokenize(json: String) -> Result<Vec<Token>, String> {
             ']' => Token::BracketClose,
             ':' => Token::Colon,
             ',' => Token::Comma,
-            '0'..='9' | '-' => Token::Number(tokenize_number(c, &mut iter)?),
-            '"' => Token::String(tokenize_str(&mut iter)?),
-            't' => tokenize_true(&mut iter)?,
-            'f' => tokenize_false(&mut iter)?,
-            'n' => tokenize_null(&mut iter)?,
-            _ => panic!("invalid char {}", c.clone()),
+            '0'..='9' | '-' => Token::Number(tokenize_number(c, iter)?),
+            '"' => Token::String(tokenize_str(iter)?),
+            't' => tokenize_true(iter)?,
+            'f' => tokenize_false(iter)?,
+            'n' => tokenize_null(iter)?,
+            _ => {
+                return Err(format!("invalid char {}", c.clone()));
+            }
         };
-        tokens.push(token);
+        return Ok(Some(token));
     }
-    Ok(tokens)
+    Ok(None)
 }
 
 #[derive(Debug, Clone)]
@@ -290,85 +345,181 @@ enum JSON {
     Null,
 }
 
-fn parse_object<'a, I>(iter: &mut Peekable<I>) -> JSON
-where
-    I: Iterator<Item = &'a Token>,
-{
+fn parse_object(iter: &mut Peekable<Chars<'_>>) -> Result<JSON, String> {
     let mut map: HashMap<String, JSON> = HashMap::new();
 
-    while let Some(p) = iter.peek() {
-        if let Token::String(key) = *p {
-            iter.next().unwrap();
-            let colon = iter.next().unwrap();
-            if *colon != Token::Colon {
-                panic!("invalid json");
+    while let Some(t) = get_token(iter)? {
+        if let Token::String(key) = t {
+            let colon = get_token(iter)?.ok_or(String::from("expected token"))?;
+            if colon != Token::Colon {
+                return Err(String::from(format!("expected ':', got {colon:?}")));
             }
-            let value = parse_value(iter).unwrap();
+            let value = parse_value(iter)?.ok_or(String::from("expected json value"))?;
             map.insert(key.clone(), value);
-        } else if let Token::Comma = *p {
-            iter.next().unwrap();
+        } else if t == Token::Comma {
             continue;
-        } else if let Token::BraceClose = *p {
-            iter.next().unwrap();
+        } else if t == Token::BraceClose {
             break;
         }
     }
-    JSON::Object(map)
+    Ok(JSON::Object(map))
 }
 
-fn parse_arr<'a, I>(iter: &mut Peekable<I>) -> JSON
-where
-    I: Iterator<Item = &'a Token>,
-{
+fn parse_arr(iter: &mut Peekable<Chars<'_>>) -> Result<JSON, String> {
     let mut arr: Vec<JSON> = vec![];
-
-    while let Some(v) = parse_value(iter) {
+    while let Some(v) = parse_value(iter)? {
         arr.push(v);
-        let next = iter.peek().unwrap();
-        if *(*next) == Token::Comma {
-            iter.next().unwrap();
-            continue;
-        } else if *(*next) == Token::BracketClose {
-            iter.next().unwrap();
-            break;
-        } else {
-            break;
+        let next = get_token(iter)?.ok_or(String::from("expected token"))?;
+        match next {
+            Token::Comma => continue,
+            Token::BracketClose => break,
+            _ => return Err(format!("invalid token: {:?}", next)),
         }
     }
 
-    JSON::Array(arr)
+    Ok(JSON::Array(arr))
 }
 
-fn parse_value<'a, I>(iter: &mut Peekable<I>) -> Option<JSON>
-where
-    I: Iterator<Item = &'a Token>,
-{
-    match iter.next().unwrap() {
-        Token::BracketOpen => Some(parse_arr(iter)),
-        Token::BraceOpen => Some(parse_object(iter)),
-        Token::String(s) => Some(JSON::String(s.clone())),
-        Token::Number(n) => Some(JSON::Number(*n)),
-        Token::True => Some(JSON::Bool(true)),
-        Token::False => Some(JSON::Bool(false)),
-        Token::Null => Some(JSON::Null),
-        _ => todo!(),
+fn parse_value(iter: &mut Peekable<Chars<'_>>) -> Result<Option<JSON>, String> {
+    let token = get_token(iter)?;
+    if token == None {
+        return Ok(None);
+    }
+    let j = match token {
+        None => None,
+        Some(t) => match t {
+            Token::BracketOpen => Some(parse_arr(iter)?),
+            Token::BraceOpen => Some(parse_object(iter)?),
+            Token::String(s) => Some(JSON::String(s.clone())),
+            Token::Number(n) => Some(JSON::Number(n)),
+            Token::True => Some(JSON::Bool(true)),
+            Token::False => Some(JSON::Bool(false)),
+            Token::Null => Some(JSON::Null),
+            _ => None,
+        },
+    };
+    Ok(j)
+}
+
+fn parse_json(s: &str) -> Result<Option<JSON>, String> {
+    let mut iter = s.chars().into_iter().peekable();
+    parse_value(&mut iter)
+}
+
+fn parse_pairs(s: &str) -> Result<Vec<CoordPair>, String> {
+    let j = parse_json(s)?.ok_or(String::from("expected json: got None"))?;
+
+    let mut pairs = vec![];
+
+    let map = match j {
+        JSON::Object(o) => o,
+        other => return Err(String::from(format!("invalid json: {other:?}"))),
+    };
+
+    let arr = match map.get("pairs").ok_or(String::from("expected \"arr\""))? {
+        JSON::Array(a) => a,
+        other => return Err(String::from(format!("unexpected JSON value: {:?}", other))),
+    };
+
+    for val in arr {
+        pairs.push(CoordPair::from_json(val)?)
+    }
+
+    Ok(pairs)
+}
+
+fn float_eq(a: f64, b: f64) -> bool {
+    a - b < f64::EPSILON
+}
+
+fn compare_results(a: &[f64], b: &[f64]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    assert_eq!(a.len(), b.len());
+    for i in 0..a.len() {
+        let r = a[i];
+        let l = b[i];
+        if !float_eq(r, l) {
+            println!("mismatch at index: {}; {} != {}", i, r, l);
+            return false;
+        }
+    }
+    true
+}
+
+struct Results {
+    input_size: usize,
+    pair_count: usize,
+    results_match: bool,
+    results_avg: f64,
+    ref_avg: f64,
+    difference: f64,
+}
+
+impl Display for Results {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = vec![
+            format!("Input Size: {}", self.input_size),
+            format!("Pair Count: {}", self.pair_count),
+            format!("Results Match: {}", self.results_match),
+            format!("Haversine Sum: {}", self.results_avg),
+            String::from(""),
+            String::from("Validation:"),
+            format!("Reference Sum: {}", self.ref_avg),
+            format!("Difference: {}", self.difference),
+        ]
+        .join("\n");
+        write!(f, "{s}")
     }
 }
 
-fn parse_json(s: String) -> JSON {
-    let tokens = tokenize(s).unwrap();
-    let mut iter = tokens.iter().peekable();
-
-    match *iter.next().unwrap() {
-        Token::BraceOpen => parse_object(&mut iter),
-        Token::BracketOpen => parse_arr(&mut iter),
-        _ => todo!(),
+fn parse_haversine_ref() -> Result<Results, Box<dyn Error>> {
+    let hj = get_haversine_json();
+    let ref_results = get_haversine_calcs();
+    let mut results = vec![];
+    let pairs = parse_pairs(&hj)?;
+    for p in &pairs {
+        results.push(ref_haversine(p.x0, p.y0, p.x1, p.y1, EARTH_RADIUS));
     }
+    let results_match = compare_results(&ref_results, &results);
+
+    let ref_avg = ref_results.iter().sum::<f64>() / ref_results.len() as f64;
+    let results_avg = results.iter().sum::<f64>() / results.len() as f64;
+
+    let r = Results {
+        input_size: hj.as_bytes().len() / (1000 * 1000),
+        pair_count: pairs.len(),
+        results_match,
+        results_avg,
+        ref_avg,
+        difference: (ref_avg - results_avg).abs(),
+    };
+
+    Ok(r)
 }
 
-fn main() {
-    generate_haversine_io();
-    let hp_str = fs::read_to_string("./haversine_pairs.json").unwrap();
-    let json = parse_json(hp_str);
-    println!("{:?}", json);
+fn main() -> Result<(), Box<dyn Error>> {
+    let args = env::args().collect::<Vec<String>>();
+    if args.len() == 1 {
+        println!("missing args");
+        return Ok(());
+    }
+    match args[1].as_str() {
+        "gen" => {
+            let num: usize = args[2].parse().unwrap();
+            generate_haversine_io(num);
+        }
+        "ref" => {
+            let results = parse_haversine_ref()?;
+            println!("{results}");
+        }
+        _ => return Err(format!("invalid argument {}", args[1]).into()),
+    }
+    Ok(())
+
+    //generate_haversine_io();
+    //let hp_str = fs::read_to_string("./haversine_pairs.json").unwrap();
+    //let json = parse_json(hp_str);
+    //println!("{:?}", json);
 }
