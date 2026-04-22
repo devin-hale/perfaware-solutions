@@ -1,12 +1,6 @@
 use std::{
-    collections::HashMap,
-    env,
-    error::Error,
-    fmt::Display,
-    fs,
-    iter::Peekable,
+    arch::asm, collections::HashMap, env, error::Error, fmt::Display, fs, iter::Peekable,
     str::Chars,
-    time::{Duration, Instant},
 };
 
 use rand::prelude::*;
@@ -344,9 +338,11 @@ fn get_token(iter: &mut Peekable<Chars<'_>>) -> Result<Option<Token>, String> {
 #[derive(Debug, Clone)]
 enum JSON {
     Object(HashMap<String, JSON>),
+    #[allow(dead_code)]
     String(String),
     Array(Vec<JSON>),
     Number(f64),
+    #[allow(dead_code)]
     Bool(bool),
     Null,
 }
@@ -454,82 +450,6 @@ fn compare_results(a: &[f64], b: &[f64]) -> bool {
     true
 }
 
-struct Results {
-    input_size: usize,
-    pair_count: usize,
-    results_match: bool,
-    results_avg: f64,
-    ref_avg: f64,
-    difference: f64,
-    json_parse_time: Duration,
-    haversine_calc_time: Duration,
-}
-
-impl Results {
-    fn json_parse_time(&self) -> String {
-        let dur = self.json_parse_time;
-
-        let ns = dur.as_nanos();
-        if ns < 1000 {
-            return format!("{ns}ns");
-        }
-
-        let us = dur.as_micros();
-        if us < 1000 {
-            return format!("{us}us");
-        }
-
-        let ms = dur.as_millis();
-        if ms < 1000 {
-            return format!("{ms}ms");
-        }
-
-        let s = dur.as_secs_f64();
-        return format!("{s}s");
-    }
-
-    fn haversine_calc_time(&self) -> String {
-        let dur = self.haversine_calc_time;
-
-        let ns = dur.as_nanos();
-        if ns < 1000 {
-            return format!("{ns}ns");
-        }
-
-        let us = dur.as_micros();
-        if us < 1000 {
-            return format!("{us}us");
-        }
-
-        let ms = dur.as_millis();
-        if ms < 1000 {
-            return format!("{ms}ms");
-        }
-
-        let s = dur.as_secs_f64();
-        return format!("{s}s");
-    }
-}
-
-impl Display for Results {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = vec![
-            format!("Input Size: {}", self.input_size),
-            format!("Pair Count: {}", self.pair_count),
-            format!("Results Match: {}", self.results_match),
-            format!("Haversine Sum: {}", self.results_avg),
-            format!("JSON Parse Time: {}", self.json_parse_time()),
-            format!("Haversine Calc Time: {}", self.haversine_calc_time()),
-            String::from(""),
-            String::from("Validation:"),
-            format!("Reference Sum: {}", self.ref_avg),
-            format!("Difference: {}", self.difference),
-        ]
-        .join("\n");
-        write!(f, "{s}")
-    }
-}
-
 // bin gen <num> <output>
 fn generate(args: &[String]) -> Result<(), Box<dyn Error>> {
     assert_eq!(args.len(), 4);
@@ -547,23 +467,30 @@ fn ref_alg(args: &[String]) -> Result<(), Box<dyn Error>> {
     assert_eq!(args.len(), 3);
     let input = args[2].clone();
 
-    let hj = get_haversine_json(&input);
-    let ref_results = get_haversine_calcs(&input);
+    let setup_start = tsc();
     let mut results = vec![];
+    let setup_end = tsc();
 
-    let json_start = Instant::now();
+    let fr_start = tsc();
+    let ref_results = get_haversine_calcs(&input);
+    let hj = get_haversine_json(&input);
+    let fr_end = tsc();
+
+    let j_start = tsc();
     let pairs = parse_pairs(&hj)?;
-    let json_parse_time = json_start.elapsed();
+    let j_end = tsc();
 
-    let calc_start = Instant::now();
+    let hc_start = tsc();
     for p in &pairs {
         results.push(ref_haversine(p.x0, p.y0, p.x1, p.y1, EARTH_RADIUS));
     }
-    let haversine_calc_time = calc_start.elapsed();
-    let results_match = compare_results(&ref_results, &results);
-
-    let ref_avg = ref_results.iter().sum::<f64>() / ref_results.len() as f64;
     let results_avg = results.iter().sum::<f64>() / results.len() as f64;
+    let ref_avg = ref_results.iter().sum::<f64>() / ref_results.len() as f64;
+    let hc_end = tsc();
+
+    let misc_start = tsc();
+    let results_match = compare_results(&ref_results, &results);
+    let misc_end = tsc();
 
     let r = Results {
         input_size: hj.as_bytes().len(),
@@ -572,12 +499,106 @@ fn ref_alg(args: &[String]) -> Result<(), Box<dyn Error>> {
         results_avg,
         ref_avg,
         difference: (ref_avg - results_avg).abs(),
-        json_parse_time,
-        haversine_calc_time,
+        file_read: cycle_est(fr_end - fr_start),
+        json_parse: cycle_est(j_end - j_start),
+        haver_calc: cycle_est(hc_end - hc_start),
+        setup: cycle_est(setup_end - setup_start),
+        misc: cycle_est(misc_end - misc_start),
     };
     println!("{r}");
 
     Ok(())
+}
+
+struct Results {
+    input_size: usize,
+    pair_count: usize,
+    results_match: bool,
+    results_avg: f64,
+    ref_avg: f64,
+    difference: f64,
+
+    setup: u64,
+    file_read: u64,
+    json_parse: u64,
+    haver_calc: u64,
+    misc: u64,
+}
+
+fn cycle_est(tsc: u64) -> u64 {
+    let mut sys = sysinfo::System::new_all();
+    sys.refresh_cpu_frequency();
+    let cpu_freq = sys.cpus()[0].frequency() * 1000 * 1000;
+    let tf = tsc_freq();
+    let scale = tf as f64 / cpu_freq as f64;
+    (tsc as f64 * scale) as u64
+}
+
+impl Display for Results {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let total_cycles =
+            self.file_read + self.haver_calc + self.json_parse + self.setup + self.misc;
+
+        let s = vec![
+            String::from("Overview:"),
+            format!("Input Size: {} bytes", self.input_size),
+            format!("Pair Count: {}", self.pair_count),
+            format!("Results Match: {}", self.results_match),
+            format!("Haversine Sum: {}", self.results_avg),
+            String::from(""),
+            String::from("Cycles:"),
+            format!("Total Cycles (est): {total_cycles}"),
+            format!(
+                "Setup Cycles (est): {} ({:.2}%)",
+                self.setup,
+                (self.setup as f64 / total_cycles as f64) * 100.0
+            ),
+            format!(
+                "File Read Cycles (est): {} ({:.2}%)",
+                self.file_read,
+                (self.file_read as f64 / total_cycles as f64) * 100.0
+            ),
+            format!(
+                "JSON Parse Cycles (est): {} ({:.2}%)",
+                self.json_parse,
+                (self.json_parse as f64 / total_cycles as f64) * 100.0
+            ),
+            format!(
+                "Haversine Calc Cycles (est): {} ({:.2}%)",
+                self.haver_calc,
+                (self.haver_calc as f64 / total_cycles as f64) * 100.0
+            ),
+            format!(
+                "Misc Cycles (est): {} ({:.2}%)",
+                self.misc,
+                (self.misc as f64 / total_cycles as f64) * 100.0
+            ),
+            String::from(""),
+            String::from("Validation:"),
+            format!("Reference Sum: {}", self.ref_avg),
+            format!("Difference: {}", self.difference),
+        ]
+        .join("\n");
+        write!(f, "{s}")
+    }
+}
+
+#[inline(always)]
+fn tsc_freq() -> u64 {
+    let freq: u64;
+    unsafe {
+        asm!( "mrs {out}, cntfrq_el0", out = out(reg) freq);
+    }
+    freq
+}
+
+#[inline(always)]
+fn tsc() -> u64 {
+    let tsc: u64;
+    unsafe {
+        asm!( "mrs {out}, cntvct_el0", out = out(reg) tsc);
+    }
+    tsc
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
