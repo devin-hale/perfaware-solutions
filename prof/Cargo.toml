@@ -1,0 +1,10 @@
+[package]
+name = "prof"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "prof"
+
+[dependencies]
+sysinfo = "0.38.4"

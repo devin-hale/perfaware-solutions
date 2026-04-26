@@ -1,3 +1,4 @@
+use prof_macros::prof;
 use std::{
     arch::asm, collections::HashMap, env, error::Error, fmt::Display, fs, iter::Peekable,
     str::Chars,
@@ -105,6 +106,7 @@ fn ref_haversine(x0: f64, y0: f64, x1: f64, y1: f64, earth_radius: f64) -> f64 {
     result
 }
 
+#[prof]
 fn generate_haversine_io(set_len: usize, output: &str) {
     let pairs = CoordPair::rand_set_clustered(set_len);
 
@@ -162,6 +164,7 @@ pub enum Token {
     Null,
 }
 
+#[prof]
 fn tokenize_number(c: char, iter: &mut Peekable<Chars<'_>>) -> Result<f64, String> {
     let mut prd = false;
     let mut s = String::from(c);
@@ -196,7 +199,6 @@ fn tokenize_number(c: char, iter: &mut Peekable<Chars<'_>>) -> Result<f64, Strin
     if s.chars().collect::<Vec<char>>()[s.len() - 1] == '.' {
         return Err(String::from("invalid number value"));
     }
-
     Ok(s.parse().unwrap())
 }
 
@@ -217,6 +219,7 @@ fn tokenize_str(iter: &mut Peekable<Chars<'_>>) -> Result<String, String> {
     Ok(s)
 }
 
+#[prof]
 fn tokenize_true(iter: &mut Peekable<Chars<'_>>) -> Result<Token, String> {
     if let Some(p) = iter.peek()
         && *p == 'r'
@@ -245,6 +248,7 @@ fn tokenize_true(iter: &mut Peekable<Chars<'_>>) -> Result<Token, String> {
     Ok(Token::True)
 }
 
+#[prof]
 fn tokenize_false(iter: &mut Peekable<Chars<'_>>) -> Result<Token, String> {
     if let Some(p) = iter.peek()
         && *p == 'a'
@@ -281,6 +285,7 @@ fn tokenize_false(iter: &mut Peekable<Chars<'_>>) -> Result<Token, String> {
     Ok(Token::False)
 }
 
+#[prof]
 fn tokenize_null(iter: &mut Peekable<Chars<'_>>) -> Result<Token, String> {
     if let Some(p) = iter.peek()
         && *p == 'u'
@@ -309,6 +314,7 @@ fn tokenize_null(iter: &mut Peekable<Chars<'_>>) -> Result<Token, String> {
     Ok(Token::Null)
 }
 
+#[prof]
 fn get_token(iter: &mut Peekable<Chars<'_>>) -> Result<Option<Token>, String> {
     while let Some(c) = iter.next() {
         if c == ' ' || c == '\n' {
@@ -347,6 +353,7 @@ enum JSON {
     Null,
 }
 
+#[prof]
 fn parse_object(iter: &mut Peekable<Chars<'_>>) -> Result<JSON, String> {
     let mut map: HashMap<String, JSON> = HashMap::new();
 
@@ -461,51 +468,34 @@ fn generate(args: &[String]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// bin ref <input>
-// looks for <input>.json and <input>.f64
+#[prof]
 fn ref_alg(args: &[String]) -> Result<(), Box<dyn Error>> {
     assert_eq!(args.len(), 3);
     let input = args[2].clone();
 
-    let setup_start = tsc();
     let mut results = vec![];
-    let setup_end = tsc();
 
-    let fr_start = tsc();
     let ref_results = get_haversine_calcs(&input);
     let hj = get_haversine_json(&input);
-    let fr_end = tsc();
 
-    let j_start = tsc();
     let pairs = parse_pairs(&hj)?;
-    let j_end = tsc();
 
-    let hc_start = tsc();
     for p in &pairs {
         results.push(ref_haversine(p.x0, p.y0, p.x1, p.y1, EARTH_RADIUS));
     }
     let results_avg = results.iter().sum::<f64>() / results.len() as f64;
     let ref_avg = ref_results.iter().sum::<f64>() / ref_results.len() as f64;
-    let hc_end = tsc();
-
-    let misc_start = tsc();
     let results_match = compare_results(&ref_results, &results);
-    let misc_end = tsc();
 
     let r = Results {
-        input_size: hj.as_bytes().len(),
+        input_size: hj.len(),
         pair_count: pairs.len(),
-        results_match,
         results_avg,
         ref_avg,
+        results_match,
         difference: (ref_avg - results_avg).abs(),
-        file_read: cycle_est(fr_end - fr_start),
-        json_parse: cycle_est(j_end - j_start),
-        haver_calc: cycle_est(hc_end - hc_start),
-        setup: cycle_est(setup_end - setup_start),
-        misc: cycle_est(misc_end - misc_start),
     };
-    println!("{r}");
+    println!("{r}\n");
 
     Ok(())
 }
@@ -517,62 +507,16 @@ struct Results {
     results_avg: f64,
     ref_avg: f64,
     difference: f64,
-
-    setup: u64,
-    file_read: u64,
-    json_parse: u64,
-    haver_calc: u64,
-    misc: u64,
-}
-
-fn cycle_est(tsc: u64) -> u64 {
-    let mut sys = sysinfo::System::new_all();
-    sys.refresh_cpu_frequency();
-    let cpu_freq = sys.cpus()[0].frequency() * 1000 * 1000;
-    let tf = tsc_freq();
-    let scale = tf as f64 / cpu_freq as f64;
-    (tsc as f64 * scale) as u64
 }
 
 impl Display for Results {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let total_cycles =
-            self.file_read + self.haver_calc + self.json_parse + self.setup + self.misc;
-
         let s = vec![
             String::from("Overview:"),
             format!("Input Size: {} bytes", self.input_size),
             format!("Pair Count: {}", self.pair_count),
             format!("Results Match: {}", self.results_match),
             format!("Haversine Sum: {}", self.results_avg),
-            String::from(""),
-            String::from("Cycles:"),
-            format!("Total Cycles (est): {total_cycles}"),
-            format!(
-                "Setup Cycles (est): {} ({:.2}%)",
-                self.setup,
-                (self.setup as f64 / total_cycles as f64) * 100.0
-            ),
-            format!(
-                "File Read Cycles (est): {} ({:.2}%)",
-                self.file_read,
-                (self.file_read as f64 / total_cycles as f64) * 100.0
-            ),
-            format!(
-                "JSON Parse Cycles (est): {} ({:.2}%)",
-                self.json_parse,
-                (self.json_parse as f64 / total_cycles as f64) * 100.0
-            ),
-            format!(
-                "Haversine Calc Cycles (est): {} ({:.2}%)",
-                self.haver_calc,
-                (self.haver_calc as f64 / total_cycles as f64) * 100.0
-            ),
-            format!(
-                "Misc Cycles (est): {} ({:.2}%)",
-                self.misc,
-                (self.misc as f64 / total_cycles as f64) * 100.0
-            ),
             String::from(""),
             String::from("Validation:"),
             format!("Reference Sum: {}", self.ref_avg),
